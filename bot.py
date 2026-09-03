@@ -7,219 +7,304 @@ from pathlib import Path
 import requests
 
 API = "https://www.nationstates.net/cgi-bin/api.cgi"
-STATE = Path("state.json")
+STATE_FILE = Path("state.json")
 
-CLIENT = os.environ["NS_CLIENT_KEY"]
-NEW_TGID = os.environ["NEW_NATIONS_TGID"]
-NEW_SECRET = os.environ["NEW_NATIONS_SECRET"]
-WA_TGID = os.environ["NEW_WA_TGID"]
-WA_SECRET = os.environ["NEW_WA_SECRET"]
+CLIENT_KEY = os.environ["NS_CLIENT_KEY"]
+TGID = os.environ["TGID"]
+SECRET_KEY = os.environ["SECRET_KEY"]
 USER_AGENT = os.environ["USER_AGENT"]
 
-HEADERS = {
+# Never send recruitment telegrams faster than this.
+SEND_DELAY = 180
+
+# GitHub Actions should not run forever.
+# This leaves time for the workflow to finish cleanly.
+MAX_RUNTIME = 1650  # 27.5 minutes
+
+session = requests.Session()
+session.headers.update({
     "User-Agent": USER_AGENT
-}
+})
 
 
-def api(params):
-    r = requests.get(
+def api_get(params):
+    response = session.get(
         API,
         params=params,
-        headers=HEADERS,
         timeout=45
     )
 
-    r.raise_for_status()
-    return ET.fromstring(r.content)
+    response.raise_for_status()
+
+    return ET.fromstring(response.content)
 
 
-def new_nations():
-    root = api({"q": "newnations"})
+def get_new_nations():
+    root = api_get({
+        "q": "newnations"
+    })
 
-    result = []
+    nations = []
 
-    for x in root.iter():
-        if x.tag.upper() == "NATION":
+    for element in root.iter():
+        if element.tag.upper() == "NATION":
             name = (
-                x.text
-                or x.attrib.get("name", "")
+                element.text
+                or element.attrib.get("name", "")
             ).strip().lower()
 
             if name:
-                result.append(name)
+                nations.append(name)
 
-    return list(dict.fromkeys(result))
+    return list(dict.fromkeys(nations))
 
 
-def wa_members():
-    root = api({
+def get_wa_members():
+    # WA=1 remains the legacy GA membership endpoint.
+    root = api_get({
         "wa": "1",
         "q": "members"
     })
 
-    result = set()
+    members = set()
 
-    for x in root.iter():
-        if x.tag.upper() in ("NATION", "MEMBER"):
+    for element in root.iter():
+        if element.tag.upper() in ("NATION", "MEMBER"):
             name = (
-                x.text
-                or x.attrib.get("name", "")
-                or x.attrib.get("nation", "")
+                element.text
+                or element.attrib.get("name", "")
+                or element.attrib.get("nation", "")
             ).strip().lower()
 
             if name:
-                result.add(name)
+                members.add(name)
 
-    return result
+    return members
 
 
-def load():
-    if not STATE.exists():
+def load_state():
+
+    if not STATE_FILE.exists():
         return {
-            "new_seen": [],
-            "wa_seen": [],
+            "initialized": False,
+            "seen_new": [],
+            "seen_wa": [],
             "queue": [],
             "last_send": 0
         }
 
     try:
         return json.loads(
-            STATE.read_text()
+            STATE_FILE.read_text(
+                encoding="utf-8"
+            )
         )
     except Exception:
         return {
-            "new_seen": [],
-            "wa_seen": [],
+            "initialized": False,
+            "seen_new": [],
+            "seen_wa": [],
             "queue": [],
             "last_send": 0
         }
 
 
-def save(s):
-    STATE.write_text(
-        json.dumps(s, indent=2)
+def save_state(state):
+
+    STATE_FILE.write_text(
+        json.dumps(
+            state,
+            indent=2,
+            sort_keys=True
+        ),
+        encoding="utf-8"
     )
 
 
-def queue(s, nation, kind):
+def add_target(state, nation, target_type):
 
-    for item in s["queue"]:
-        if (
-            item["nation"] == nation
-            and item["kind"] == kind
-        ):
+    nation = nation.lower().strip()
+
+    for item in state["queue"]:
+        if item["nation"] == nation:
             return
 
-    s["queue"].append({
+    state["queue"].append({
         "nation": nation,
-        "kind": kind
+        "type": target_type
     })
 
 
-def send(nation, kind):
+def discover(state):
 
-    if kind == "new":
-        tgid = NEW_TGID
-        secret = NEW_SECRET
-    else:
-        tgid = WA_TGID
-        secret = WA_SECRET
+    print("Getting new nations...")
 
-    r = requests.get(
+    new_nations = get_new_nations()
+
+    print(
+        "New-nation list:",
+        len(new_nations)
+    )
+
+    print("Getting WA members...")
+
+    wa_members = get_wa_members()
+
+    print(
+        "WA members:",
+        len(wa_members)
+    )
+
+    old_new = set(state["seen_new"])
+    old_wa = set(state["seen_wa"])
+
+    # First run only records the existing lists.
+    # This prevents accidentally messaging every nation
+    # already present when the bot is first installed.
+    if not state["initialized"]:
+
+        state["seen_new"] = new_nations
+        state["seen_wa"] = list(wa_members)
+        state["initialized"] = True
+
+        print(
+            "Initial scan recorded. "
+            "Existing nations were not queued."
+        )
+
+        return
+
+    # Newly appearing nations
+    for nation in new_nations:
+
+        if nation not in old_new:
+            add_target(
+                state,
+                nation,
+                "new_nation"
+            )
+
+    # Newly appearing WA members
+    for nation in wa_members:
+
+        if nation not in old_wa:
+            add_target(
+                state,
+                nation,
+                "new_wa"
+            )
+
+    state["seen_new"] = new_nations
+    state["seen_wa"] = list(wa_members)
+
+
+def send_telegram(nation):
+
+    response = session.get(
         API,
         params={
             "a": "sendTG",
-            "client": CLIENT,
-            "tgid": tgid,
-            "key": secret,
+            "client": CLIENT_KEY,
+            "tgid": TGID,
+            "key": SECRET_KEY,
             "to": nation
         },
-        headers=HEADERS,
         timeout=45
     )
 
-    if r.status_code == 429:
-        print("NationStates rate limit.")
+    if response.status_code == 429:
+        print(
+            "NationStates rate limit reached."
+        )
         return False
 
-    if r.status_code >= 400:
+    if response.status_code >= 400:
         print(
-            "TG failed:",
+            "Telegram failed:",
             nation,
-            r.status_code
+            response.status_code
         )
         return False
 
     print(
-        "TG sent:",
-        nation,
-        kind
+        "Telegram sent:",
+        nation
     )
 
     return True
 
 
-def main():
+def process_queue(state, start_time):
 
-    s = load()
+    while state["queue"]:
 
-    print("Getting new nations...")
-    nations = new_nations()
-
-    print(
-        "Found",
-        len(nations),
-        "new-nation entries."
-    )
-
-    print("Getting WA members...")
-    members = wa_members()
-
-    old_new = set(s["new_seen"])
-    old_wa = set(s["wa_seen"])
-
-    # New nations
-    for nation in nations:
-        if nation not in old_new:
-            queue(
-                s,
-                nation,
-                "new"
+        # Do not allow this Actions job to run forever.
+        if time.time() - start_time >= MAX_RUNTIME:
+            print(
+                "Maximum workflow runtime reached."
             )
+            break
 
-    # Newly detected WA members
-    for nation in members - old_wa:
-        queue(
-            s,
-            nation,
-            "wa"
+        elapsed = (
+            time.time()
+            - float(state["last_send"])
         )
 
-    s["new_seen"] = nations
-    s["wa_seen"] = list(members)
+        wait = SEND_DELAY - elapsed
 
-    # Recruitment TG rate limit:
-    # do not send again until 180 seconds have passed.
-    now = time.time()
+        if wait > 0:
 
-    if s["queue"]:
-        if now - s["last_send"] >= 180:
+            print(
+                "Waiting",
+                int(wait),
+                "seconds..."
+            )
 
-            item = s["queue"][0]
+            time.sleep(wait)
 
-            if send(
-                item["nation"],
-                item["kind"]
-            ):
-                s["queue"].pop(0)
-                s["last_send"] = time.time()
+        item = state["queue"][0]
+
+        if send_telegram(item["nation"]):
+
+            state["queue"].pop(0)
+            state["last_send"] = time.time()
+
+            save_state(state)
+
+        else:
+            print(
+                "Send failed. "
+                "Keeping target in queue."
+            )
+            break
+
+
+def main():
+
+    started = time.time()
+
+    state = load_state()
+
+    discover(state)
+
+    save_state(state)
 
     print(
-        "Remaining queue:",
-        len(s["queue"])
+        "Queue:",
+        len(state["queue"])
     )
 
-    save(s)
+    process_queue(
+        state,
+        started
+    )
+
+    save_state(state)
+
+    print(
+        "Finished. Remaining queue:",
+        len(state["queue"])
+    )
 
 
 if __name__ == "__main__":
