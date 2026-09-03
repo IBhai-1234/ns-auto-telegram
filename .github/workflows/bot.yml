@@ -1,16 +1,22 @@
-name: NationStates Bot
+name: NationStates AutoTelegram
 
 on:
   workflow_dispatch:
+
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "*/30 * * * *"
+
+permissions:
+  contents: write
 
 jobs:
-  run:
+  bot:
+
     runs-on: ubuntu-latest
 
     steps:
-      - name: Download code
+
+      - name: Get repository
         uses: actions/checkout@v4
 
       - name: Install Python
@@ -18,10 +24,10 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt
+      - name: Install packages
+        run: pip install requests
 
-      - name: Run bot
+      - name: Run NationStates bot
         env:
           NS_CLIENT_KEY: ${{ secrets.NS_CLIENT_KEY }}
           NEW_NATIONS_TGID: ${{ secrets.NEW_NATIONS_TGID }}
@@ -30,3 +36,11 @@ jobs:
           NEW_WA_SECRET: ${{ secrets.NEW_WA_SECRET }}
           USER_AGENT: ${{ secrets.USER_AGENT }}
         run: python bot.py
+
+      - name: Save bot state
+        run: |
+          git config user.name "NationStates Bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add state.json
+          git diff --cached --quiet || git commit -m "Update bot state"
+          git push
