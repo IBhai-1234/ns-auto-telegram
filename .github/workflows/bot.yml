@@ -1,0 +1,32 @@
+name: NationStates Bot
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/5 * * * *"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download code
+        uses: actions/checkout@v4
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run bot
+        env:
+          NS_CLIENT_KEY: ${{ secrets.NS_CLIENT_KEY }}
+          NEW_NATIONS_TGID: ${{ secrets.NEW_NATIONS_TGID }}
+          NEW_NATIONS_SECRET: ${{ secrets.NEW_NATIONS_SECRET }}
+          NEW_WA_TGID: ${{ secrets.NEW_WA_TGID }}
+          NEW_WA_SECRET: ${{ secrets.NEW_WA_SECRET }}
+          USER_AGENT: ${{ secrets.USER_AGENT }}
+        run: python bot.py
