@@ -9,12 +9,17 @@ const CLIENT_KEY = process.env.NS_CLIENT_KEY;
 
 const USER_AGENT = "Slavstonia AutoTelegram Bot";
 
+const STATE_FILE = "state.json";
+const SEND_DELAY = 180000; // 180 seconds
+
 if (!TGID || !SECRET_KEY || !CLIENT_KEY) {
-    console.error("ERROR: One or more GitHub Secrets are missing.");
+    console.error("ERROR: Missing GitHub Secret.");
     process.exit(1);
 }
 
-const STATE_FILE = "state.json";
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 function loadState() {
     if (!fs.existsSync(STATE_FILE)) {
@@ -23,6 +28,7 @@ function loadState() {
             seenNew: [],
             seenWA: [],
             queue: [],
+            sent: [],
             lastSend: 0
         };
     }
@@ -89,9 +95,13 @@ function extractNationNames(xml) {
     let match;
 
     while ((match = regex.exec(xml)) !== null) {
-        names.push(
-            match[1].trim().toLowerCase()
-        );
+        const nation = match[1]
+            .trim()
+            .toLowerCase();
+
+        if (nation) {
+            names.push(nation);
+        }
     }
 
     return [...new Set(names)];
@@ -117,6 +127,12 @@ async function getWAMembers() {
 function addToQueue(state, nation, reason) {
     nation = nation.toLowerCase();
 
+    // Never contact the same nation twice.
+    if (state.sent.includes(nation)) {
+        return;
+    }
+
+    // Don't add duplicates to the queue.
     if (
         state.queue.some(
             item => item.nation === nation
@@ -129,11 +145,15 @@ function addToQueue(state, nation, reason) {
         nation,
         reason
     });
+
+    console.log(
+        `Queued ${nation} (${reason})`
+    );
 }
 
 async function sendTelegram(nation) {
     console.log(
-        `Sending recruitment telegram to ${nation}...`
+        `Sending recruitment TG to ${nation}...`
     );
 
     const result = await request({
@@ -144,31 +164,32 @@ async function sendTelegram(nation) {
         to: nation
     });
 
-    console.log("NationStates response:", result);
+    console.log(
+        `NationStates response: ${result}`
+    );
 }
 
-async function main() {
-    const state = loadState();
+async function discover(state) {
+    console.log("Getting newest nations...");
 
-    console.log("Checking newest nations...");
     const newNations = await getNewNations();
 
     console.log(
-        `Found ${newNations.length} newest nations.`
+        `Newest nations found: ${newNations.length}`
     );
 
-    console.log("Checking World Assembly members...");
+    console.log("Getting WA members...");
+
     const waMembers = await getWAMembers();
 
     console.log(
-        `Found ${waMembers.length} WA members.`
+        `WA members found: ${waMembers.length}`
     );
 
     const oldNew = new Set(state.seenNew);
     const oldWA = new Set(state.seenWA);
 
-    // First run: record the current lists.
-    // This prevents messaging existing nations immediately.
+    // First run only records what's already there.
     if (!state.initialized) {
         state.initialized = true;
         state.seenNew = newNations;
@@ -177,13 +198,17 @@ async function main() {
         saveState(state);
 
         console.log(
-            "First run complete. Existing nations recorded."
+            "First run complete."
+        );
+
+        console.log(
+            "Existing nations were recorded, not contacted."
         );
 
         return;
     }
 
-    // Find newly created nations.
+    // Newly appearing nations.
     for (const nation of newNations) {
         if (!oldNew.has(nation)) {
             addToQueue(
@@ -194,7 +219,7 @@ async function main() {
         }
     }
 
-    // Find newly joined WA nations.
+    // Newly appearing WA members.
     for (const nation of waMembers) {
         if (!oldWA.has(nation)) {
             addToQueue(
@@ -209,56 +234,108 @@ async function main() {
     state.seenWA = waMembers;
 
     saveState(state);
+}
 
+async function processQueue(state) {
     console.log(
-        `Queue: ${state.queue.length} nations`
+        `Targets waiting: ${state.queue.length}`
     );
 
-    // Nothing to send.
-    if (state.queue.length === 0) {
-        console.log("Nothing to send.");
-        return;
+    while (state.queue.length > 0) {
+
+        const target = state.queue[0];
+
+        // Respect the 180-second recruitment limit.
+        const elapsed =
+            Date.now() - state.lastSend;
+
+        if (
+            state.lastSend !== 0 &&
+            elapsed < SEND_DELAY
+        ) {
+            const remaining =
+                SEND_DELAY - elapsed;
+
+            console.log(
+                `Waiting ${Math.ceil(
+                    remaining / 1000
+                )} seconds before next TG...`
+            );
+
+            await sleep(remaining);
+        }
+
+        try {
+            await sendTelegram(
+                target.nation
+            );
+
+            // Remove from queue.
+            state.queue.shift();
+
+            // Remember permanently that we contacted them.
+            if (!state.sent.includes(target.nation)) {
+                state.sent.push(target.nation);
+            }
+
+            state.lastSend = Date.now();
+
+            saveState(state);
+
+            console.log(
+                `SUCCESS: ${target.nation}`
+            );
+
+            console.log(
+                `Remaining queue: ${state.queue.length}`
+            );
+
+        } catch (error) {
+
+            console.error(
+                `FAILED: ${target.nation}`
+            );
+
+            console.error(
+                error.message
+            );
+
+            // Keep the nation in the queue.
+            // The next scheduled run can try again.
+            saveState(state);
+
+            process.exit(1);
+        }
     }
 
-    // NationStates recruitment TG limit:
-    // one successful recruitment TG every 180 seconds.
-    const elapsed =
-        (Date.now() - state.lastSend) / 1000;
+    console.log(
+        "Queue completely processed."
+    );
+}
 
-    if (elapsed < 180) {
-        console.log(
-            `Waiting for rate limit: ${Math.ceil(
-                180 - elapsed
-            )} seconds.`
-        );
+async function main() {
+    console.log(
+        "===== NationStates AutoTelegram ====="
+    );
 
-        return;
-    }
+    const state = loadState();
 
-    const target = state.queue[0];
+    await discover(state);
 
-    try {
-        await sendTelegram(target.nation);
+    await processQueue(state);
 
-        state.queue.shift();
-        state.lastSend = Date.now();
+    saveState(state);
 
-        saveState(state);
-
-        console.log(
-            `Successfully contacted ${target.nation}.`
-        );
-    } catch (error) {
-        console.error(
-            "Telegram failed:",
-            error.message
-        );
-
-        process.exit(1);
-    }
+    console.log(
+        "===== BOT FINISHED ====="
+    );
 }
 
 main().catch(error => {
-    console.error(error);
+    console.error(
+        "FATAL ERROR:",
+        error.message
+    );
+
     process.exit(1);
 });
