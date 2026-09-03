@@ -10,13 +10,14 @@ permissions:
   contents: write
 
 jobs:
+
   bot:
 
     runs-on: ubuntu-latest
 
     steps:
 
-      - name: Get repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Install Python
@@ -24,23 +25,27 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install packages
+      - name: Install requests
         run: pip install requests
 
-      - name: Run NationStates bot
+      - name: Run bot
         env:
           NS_CLIENT_KEY: ${{ secrets.NS_CLIENT_KEY }}
-          NEW_NATIONS_TGID: ${{ secrets.NEW_NATIONS_TGID }}
-          NEW_NATIONS_SECRET: ${{ secrets.NEW_NATIONS_SECRET }}
-          NEW_WA_TGID: ${{ secrets.NEW_WA_TGID }}
-          NEW_WA_SECRET: ${{ secrets.NEW_WA_SECRET }}
+          TGID: ${{ secrets.TGID }}
+          SECRET_KEY: ${{ secrets.SECRET_KEY }}
           USER_AGENT: ${{ secrets.USER_AGENT }}
         run: python bot.py
 
-      - name: Save bot state
+      - name: Save state
         run: |
-          git config user.name "NationStates Bot"
+          git config user.name "NationStates AutoTelegram"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
           git add state.json
-          git diff --cached --quiet || git commit -m "Update bot state"
-          git push
+
+          if git diff --cached --quiet; then
+            echo "No state changes."
+          else
+            git commit -m "Update NationStates bot state"
+            git push
+          fi
