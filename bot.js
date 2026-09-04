@@ -27,7 +27,9 @@ function loadState() {
 
     if (fs.existsSync(STATE_FILE)) {
         try {
-            state = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
+            state = JSON.parse(
+                fs.readFileSync(STATE_FILE, "utf8")
+            );
         } catch {
             console.log("Creating fresh state.");
         }
@@ -35,9 +37,15 @@ function loadState() {
 
     state.initialized = state.initialized ?? false;
     state.lastHappeningID = Number(state.lastHappeningID || 0);
-    state.seenNew = Array.isArray(state.seenNew) ? state.seenNew : [];
-    state.processed = Array.isArray(state.processed) ? state.processed : [];
-    state.queue = Array.isArray(state.queue) ? state.queue : [];
+    state.seenNew = Array.isArray(state.seenNew)
+        ? state.seenNew
+        : [];
+    state.processed = Array.isArray(state.processed)
+        ? state.processed
+        : [];
+    state.queue = Array.isArray(state.queue)
+        ? state.queue
+        : [];
     state.lastSend = Number(state.lastSend || 0);
 
     return state;
@@ -77,6 +85,7 @@ function request(params) {
                         const error = new Error(
                             `HTTP ${res.statusCode}: ${data}`
                         );
+
                         error.statusCode = res.statusCode;
                         reject(error);
                         return;
@@ -88,7 +97,9 @@ function request(params) {
         );
 
         req.setTimeout(30000, () => {
-            req.destroy(new Error("Request timed out"));
+            req.destroy(
+                new Error("Request timed out")
+            );
         });
 
         req.on("error", reject);
@@ -104,22 +115,31 @@ async function getNewestNations() {
         q: "newnations"
     });
 
-    const nations = [];
-    const regex =
-        /<NATION[^>]*>([^<]+)<\/NATION>/gi;
+    const match = xml.match(
+        /<NEWNATIONS>([\s\S]*?)<\/NEWNATIONS>/i
+    );
 
-    let match;
+    if (!match) {
+        console.log(
+            "Could not find NEWNATIONS in API response."
+        );
 
-    while ((match = regex.exec(xml)) !== null) {
-        const nation = match[1]
-            .trim()
-            .replace(/^@@|@@$/g, "")
-            .toLowerCase();
+        console.log(xml);
 
-        if (nation) nations.push(nation);
+        return [];
     }
 
-    return [...new Set(nations)];
+    const nations = match[1]
+        .split(",")
+        .map(nation =>
+            nation
+                .trim()
+                .replace(/^@@|@@$/g, "")
+                .toLowerCase()
+        )
+        .filter(Boolean);
+
+    return [...new Set(nations)].slice(0, 50);
 }
 
 /* =========================
@@ -164,7 +184,9 @@ async function getNewWANations(state) {
                 .replace(/^@@|@@$/g, "")
                 .toLowerCase();
 
-            if (nation) nations.push(nation);
+            if (nation) {
+                nations.push(nation);
+            }
         }
     }
 
@@ -188,7 +210,11 @@ function addTarget(state, nation, reason) {
         return;
     }
 
-    if (state.queue.some(x => x.nation === nation)) {
+    if (
+        state.queue.some(
+            x => x.nation === nation
+        )
+    ) {
         return;
     }
 
@@ -197,7 +223,9 @@ function addTarget(state, nation, reason) {
         reason
     });
 
-    console.log(`QUEUED: ${nation} (${reason})`);
+    console.log(
+        `QUEUED: ${nation} (${reason})`
+    );
 }
 
 /* =========================
@@ -206,9 +234,15 @@ function addTarget(state, nation, reason) {
 
 async function sendTG(nation) {
     console.log("");
-    console.log(`========== SENDING TO ${nation} ==========`);
+    console.log(
+        `========== SENDING TO ${nation} ==========`
+    );
 
-    for (let attempt = 1; attempt <= RETRIES; attempt++) {
+    for (
+        let attempt = 1;
+        attempt <= RETRIES;
+        attempt++
+    ) {
         try {
             const response = await request({
                 a: "sendTG",
@@ -218,7 +252,10 @@ async function sendTG(nation) {
                 to: nation
             });
 
-            console.log("NationStates API response:");
+            console.log(
+                "NationStates API response:"
+            );
+
             console.log(response);
 
             if (/error/i.test(response)) {
@@ -227,7 +264,10 @@ async function sendTG(nation) {
                 );
             }
 
-            console.log(`SEND ACCEPTED: ${nation}`);
+            console.log(
+                `SEND ACCEPTED: ${nation}`
+            );
+
             return true;
 
         } catch (error) {
@@ -236,7 +276,10 @@ async function sendTG(nation) {
             );
 
             if (attempt < RETRIES) {
-                console.log("Waiting 60 seconds before retry...");
+                console.log(
+                    "Waiting 60 seconds before retry..."
+                );
+
                 await sleep(60000);
             }
         }
@@ -246,30 +289,49 @@ async function sendTG(nation) {
 }
 
 /* =========================
-   DISCOVER
+   DISCOVER TARGETS
 ========================= */
 
 async function discover(state) {
+
     console.log("");
-    console.log("===== NEWEST NATIONS =====");
+    console.log(
+        "===== NEWEST NATIONS ====="
+    );
 
-    const newest = await getNewestNations();
+    const newest =
+        await getNewestNations();
 
-    console.log(`Found ${newest.length} newest nations.`);
+    console.log(
+        `Found ${newest.length} newest nations.`
+    );
 
     for (const nation of newest) {
-        addTarget(state, nation, "newest nation");
+        addTarget(
+            state,
+            nation,
+            "newest nation"
+        );
     }
 
     console.log("");
-    console.log("===== NEW WA NATIONS =====");
+    console.log(
+        "===== NEW WA NATIONS ====="
+    );
 
-    const newWA = await getNewWANations(state);
+    const newWA =
+        await getNewWANations(state);
 
-    console.log(`Found ${newWA.length} new WA nations.`);
+    console.log(
+        `Found ${newWA.length} new WA nations.`
+    );
 
     for (const nation of newWA) {
-        addTarget(state, nation, "new WA nation");
+        addTarget(
+            state,
+            nation,
+            "new WA nation"
+        );
     }
 
     state.seenNew = newest;
@@ -283,29 +345,49 @@ async function discover(state) {
 ========================= */
 
 async function processQueue(state) {
+
     console.log("");
-    console.log(`===== ${state.queue.length} TARGETS IN QUEUE =====`);
+
+    console.log(
+        `===== ${state.queue.length} TARGETS IN QUEUE =====`
+    );
 
     while (state.queue.length > 0) {
-        const target = state.queue[0];
+
+        const target =
+            state.queue[0];
 
         if (state.lastSend !== 0) {
-            const elapsed = Date.now() - state.lastSend;
+
+            const elapsed =
+                Date.now() -
+                state.lastSend;
 
             if (elapsed < SEND_DELAY) {
-                const remaining = SEND_DELAY - elapsed;
+
+                const remaining =
+                    SEND_DELAY -
+                    elapsed;
 
                 console.log(
-                    `Waiting ${Math.ceil(remaining / 1000)} seconds...`
+                    `Waiting ${Math.ceil(
+                        remaining / 1000
+                    )} seconds...`
                 );
 
-                await sleep(remaining);
+                await sleep(
+                    remaining
+                );
             }
         }
 
-        const success = await sendTG(target.nation);
+        const success =
+            await sendTG(
+                target.nation
+            );
 
         if (!success) {
+
             console.log(
                 `Keeping ${target.nation} in queue for the next run.`
             );
@@ -317,19 +399,30 @@ async function processQueue(state) {
 
         state.queue.shift();
 
-        if (!state.processed.includes(target.nation)) {
-            state.processed.push(target.nation);
+        if (
+            !state.processed.includes(
+                target.nation
+            )
+        ) {
+            state.processed.push(
+                target.nation
+            );
         }
 
-        state.lastSend = Date.now();
+        state.lastSend =
+            Date.now();
 
         saveState(state);
 
-        console.log(`DONE: ${target.nation}`);
+        console.log(
+            `DONE: ${target.nation}`
+        );
     }
 
     console.log("");
-    console.log("===== QUEUE EMPTY =====");
+    console.log(
+        "===== QUEUE EMPTY ====="
+    );
 }
 
 /* =========================
@@ -337,20 +430,33 @@ async function processQueue(state) {
 ========================= */
 
 async function main() {
-    console.log("");
-    console.log("===== SLAVSTONIA AUTOTELEGRAM =====");
 
-    const state = loadState();
+    console.log("");
+
+    console.log(
+        "===== SLAVSTONIA AUTOTELEGRAM ====="
+    );
+
+    const state =
+        loadState();
 
     await discover(state);
+
     await processQueue(state);
 
     saveState(state);
 
-    console.log("===== RUN FINISHED =====");
+    console.log(
+        "===== RUN FINISHED ====="
+    );
 }
 
 main().catch(error => {
-    console.error("FATAL ERROR:", error);
+
+    console.error(
+        "FATAL ERROR:",
+        error
+    );
+
     process.exit(1);
 });
